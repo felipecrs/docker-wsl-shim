@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*.*.*
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # for release
+    env:
+      CGO_ENABLED: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "build/$arch/docker.exe" ./cmd/docker
+            (cd "build/$arch" && 7z a -bd "../../dist/docker-wsl-shim-windows-$arch.zip" docker.exe ../../LICENSE)
+          done
+      - if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          make_latest: true
+          generate_release_notes: true
+          files: dist/*.zip
