@@ -9,13 +9,13 @@ docker compose -f .\compose.yml up -d
 
 ## Install
 
-Requires Docker in the default WSL 2 distribution, usable without `sudo`, and [Go](https://go.dev):
+With [mise](https://mise.jdx.dev):
 
 ```powershell
-git clone https://github.com/felipecrs/docker-wsl-shim; cd docker-wsl-shim; go install ./cmd/docker
+mise use -g go go:github.com/felipecrs/docker-wsl-shim/cmd/docker
 ```
 
-This puts `docker.exe` in `%USERPROFILE%\go\bin`, which has to be in your `PATH`.
+It requires Docker in the default WSL 2 distribution, usable without `sudo`.
 
 ## What it does
 
