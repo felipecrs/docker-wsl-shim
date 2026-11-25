@@ -1,0 +1,157 @@
+//go:build windows
+
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const testImage = "docker-wsl-shim-test-build"
+
+func TestBuild(t *testing.T) {
+	docker := buildShim(t)
+	t.Cleanup(func() { _ = exec.Command(docker, "rmi", "-f", testImage).Run() })
+
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	write(`context dir\hello.txt`, "from context")
+	write(`lib\lib.txt`, "from lib")
+	secret := write("secret.txt", "from secret")
+	context, lib := filepath.Join(dir, "context dir"), filepath.Join(dir, "lib")
+	dockerfile := write(`docker\Dockerfile`, strings.Join([]string{
+		"FROM " + image + " AS base",
+		"ARG DIR",
+		"COPY hello.txt /out/hello.txt",
+		"COPY --from=lib lib.txt /out/lib.txt",
+		`RUN --mount=type=secret,id=file --mount=type=secret,id=var sh -c 'cat /run/secrets/file > /out/file.txt; cat /run/secrets/var > /out/var.txt; printf %s "$DIR" > /out/dir.txt'`,
+		"FROM scratch",
+		"COPY --from=base /out /",
+	}, "\n"))
+	options := []string{
+		"-f", dockerfile, "--build-context", "lib=" + lib, "--secret", "id=file,src=" + secret,
+		"--secret", "id=var,env=SHIM_SECRET", "--build-arg", `DIR=C:\kept`,
+	}
+	expected := map[string]string{
+		"hello.txt": "from context", "lib.txt": "from lib", "file.txt": "from secret", "var.txt": "a b $c", "dir.txt": `C:\kept`,
+	}
+
+	run := func(t *testing.T, stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(docker, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SHIM_SECRET=a b $c", "BUILDKIT_PROGRESS=plain")
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker %q: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	check := func(t *testing.T, out string) {
+		t.Helper()
+		for name, want := range expected {
+			if got, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(got) != want {
+				t.Errorf("%s: got %q %v, want %q", name, got, err, want)
+			}
+		}
+	}
+
+	for _, command := range [][]string{{"build"}, {"buildx", "build"}, {"image", "build"}, {"builder", "build"}} {
+		t.Run(strings.Join(command, " "), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "out")
+			args := append(append([]string{}, command...), options...)
+			run(t, "", append(args, "--output", "type=local,dest="+out, context)...)
+			check(t, out)
+		})
+	}
+	t.Run("output as a path", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "out")
+		run(t, "", append(append([]string{"buildx", "build"}, options...), "-o", out, context)...)
+		check(t, out)
+	})
+	t.Run("relative paths", func(t *testing.T) {
+		run(t, "", "buildx", "build", "-f", `.\docker\Dockerfile`, "--build-context", `lib=.\lib`, "--secret", `id=file,src=.\secret.txt`,
+			"--secret", "id=var,env=SHIM_SECRET", "--build-arg", `DIR=C:\kept`, "-o", `.\relative`, `.\context dir`)
+		check(t, filepath.Join(dir, "relative"))
+	})
+	t.Run("load, iidfile and metadata", func(t *testing.T) {
+		iid, metadata := filepath.Join(dir, "iid.txt"), filepath.Join(dir, "metadata.json")
+		run(t, "", append(append([]string{"buildx", "build"}, options...), "--load", "-t", testImage, "--iidfile", iid, "--metadata-file", metadata, context)...)
+		if raw, err := os.ReadFile(iid); err != nil || !strings.HasPrefix(string(raw), "sha256:") {
+			t.Errorf("iidfile: %q %v", raw, err)
+		}
+		if raw, err := os.ReadFile(metadata); err != nil || !strings.Contains(string(raw), "digest") {
+			t.Errorf("metadata: %q %v", raw, err)
+		}
+		run(t, "", "image", "inspect", testImage)
+	})
+	t.Run("Dockerfile from standard input", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "out")
+		run(t, "FROM scratch\nCOPY hello.txt /\n", "buildx", "build", "-f", "-", "-o", out, context)
+		if got, err := os.ReadFile(filepath.Join(out, "hello.txt")); err != nil || string(got) != "from context" {
+			t.Errorf("got %q %v", got, err)
+		}
+	})
+	t.Run("bake", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "out")
+		file := write("docker-bake.hcl", `target "app" {
+  args = { DIR = "overridden" }
+  secret = ["id=var,env=SHIM_SECRET"]
+}
+`)
+		run(t, "", "buildx", "bake", "-f", file, "--allow", "fs="+dir, "--allow", "fs="+filepath.Dir(out),
+			"--set", "*.context="+context, "--set", "*.dockerfile="+dockerfile, "--set", "*.contexts.lib="+lib,
+			"--set", "*.secrets=id=file,src="+secret, "--set", "*.secrets+=id=var,env=SHIM_SECRET",
+			"--set", `app.args.DIR=C:\kept`, "--set", "*.output=type=local,dest="+out, "app")
+		check(t, out)
+	})
+	t.Run("compose build", func(t *testing.T) {
+		file := write("build.compose.yml", "services:\n  app:\n    image: "+testImage+"\n    build:\n      context: ./context dir\n      dockerfile_inline: |\n        FROM scratch\n        COPY hello.txt /\n")
+		run(t, "", "compose", "-p", testImage, "-f", file, "build")
+	})
+}
+
+func TestShimVariables(t *testing.T) {
+	docker := buildShim(t)
+	run := func(env []string, args ...string) (string, int) {
+		cmd := exec.Command(docker, args...)
+		cmd.Env = append(os.Environ(), env...)
+		out, _ := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), cmd.ProcessState.ExitCode()
+	}
+
+	out, _ := run([]string{printCommandEnv + "=true"}, "run", "--gpus", "all", "-v", `C:\a:/d`, "img", "-v", `C:\b:/d`)
+	if want := `docker run --gpus all -v /mnt/c/a:/d img -v C:\b:/d`; out != want {
+		t.Errorf("print command: got %q, want %q", out, want)
+	}
+	if out, _ := run([]string{dockerPathEnv + "=/bin/echo"}, "ps", "-a"); out != "ps -a" {
+		t.Errorf("docker path: got %q", out)
+	}
+
+	// A docker in WSL that leads back to the shim, as a docker found on the Windows PATH would.
+	script := filepath.Join(t.TempDir(), "docker")
+	back := translatePath(docker)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec '"+back+"' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out, code := run([]string{dockerPathEnv + "=" + translatePath(script)}, "ps")
+	if code != 1 || !strings.Contains(out, "ERROR(docker-wsl-shim): docker in WSL led back to this shim") {
+		t.Errorf("loop: exit code %d, %q", code, out)
+	}
+	if out, code := run([]string{dockerPathEnv + "=/nonexistent"}, "ps"); code == 0 {
+		t.Errorf("missing docker: exit code 0, %q", out)
+	}
+}

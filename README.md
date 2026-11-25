@@ -2,12 +2,22 @@
 
 A `docker.exe` for Windows that runs the docker CLI of your default WSL distribution. It gives Windows programs a `docker` command without Docker Desktop.
 
-```powershell
-docker run --rm -v C:\Users\me\project:/src alpine ls /src
-docker compose -f .\compose.yml up -d
-```
+## Why?
 
-## Install
+Docker runs fine in WSL 2 without Docker Desktop, but then only WSL has a `docker` command. Scripts, editors and tools on Windows that call `docker` don't find it.
+
+Calling `wsl docker` instead doesn't quite work: Windows paths mean nothing to it, environment variables are lost, and most programs can't be told to call something else.
+
+## Highlights
+
+- **Windows paths work**: in `--volume`, `--mount`, `--cidfile`, `cp`, compose files and more. `C:\a` becomes `/mnt/c/a`, `\\wsl.localhost\Ubuntu\a` becomes `/a`, and `.\a` becomes `./a`.
+- **Builds work**: `docker build`, `buildx build`, `buildx bake` and `compose build`, with contexts, secrets, outputs, caches and metadata files on Windows paths.
+- **What runs inside the container is left alone.** The options of each command are learned from `docker --help`, so new docker versions need no changes here.
+- **Arguments reach docker unchanged.** There is no shell in between.
+- **Environment variables are passed on**, so that `-e NAME`, `--secret env=NAME` and `${NAME}` in compose files work. `PATH`, `HOME` and others that mean something else on Linux are not.
+- **Streams, exit codes and the working directory** behave as they do with the real CLI. If `docker.exe` is killed, the client in WSL ends too.
+
+## Installation
 
 With [mise](https://mise.jdx.dev):
 
@@ -19,17 +29,31 @@ Or put `docker.exe` from the [latest release](https://github.com/felipecrs/docke
 
 It requires Docker in the default WSL 2 distribution, usable without `sudo`.
 
-## What it does
+## Try it yourself
 
-- **Arguments** reach docker unchanged. There is no shell in between.
-- **Paths** are translated in docker's own arguments: `C:\a` becomes `/mnt/c/a`, `\\wsl.localhost\Ubuntu\a` becomes `/a`, and `.\a` becomes `./a`. This covers `-v`, `--mount`, `--cidfile`, `--env-file`, build contexts, `cp`, compose files and more. The command that runs inside the container is left alone.
-- **Environment variables** are passed on, so that `-e NAME` and `${NAME}` in compose files work. `PATH`, `HOME` and others that mean something else on Linux are not.
-- **Streams, exit codes and the working directory** behave as they do with the real CLI. If `docker.exe` is killed, the client in WSL ends too.
+```powershell
+docker run --rm -v C:\Windows\System32\drivers\etc:/etc/windows:ro alpine cat /etc/windows/hosts
+```
+
+See what it would run, without running it:
+
+```powershell
+$env:DOCKER_WSL_SHIM_PRINT_COMMAND = "true"
+docker run --rm -v C:\a:/a alpine ls C:\a
+# docker run --rm -v /mnt/c/a:/a alpine ls C:\a
+```
+
+## Configuration
+
+| Environment variable | Description |
+|---|---|
+| `DOCKER_WSL_SHIM_DOCKER_PATH` | The docker to run in WSL. Default: `docker` |
+| `DOCKER_WSL_SHIM_PRINT_COMMAND` | `true` prints the command instead of running it |
 
 ## Limits
 
-- Only programs that run the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide.
-- Windows paths written inside compose files are not translated. Relative ones work.
+- Only programs that call the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide.
+- Windows paths written inside compose and bake files are not translated. Relative ones work.
 - Drives are expected under `/mnt`, and `\\wsl.localhost\<distro>` is taken for the default distribution.
 
 ## Development
@@ -39,3 +63,7 @@ go test ./...
 ```
 
 The end-to-end tests use the `alpine` image and are skipped when WSL has no Docker.
+
+## See also
+
+- [docker-on-docker-shim](https://github.com/felipecrs/docker-on-docker-shim), which makes volume mounts work when running docker on docker.

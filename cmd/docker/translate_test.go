@@ -40,12 +40,22 @@ func TestTranslateArgs(t *testing.T) {
 		{"volume create does not run anything", []string{"volume", "create", "-o", `device=C:\a`, "v"}, []string{"volume", "create", "-o", "device=/mnt/c/a", "v"}},
 		{"dashdash", []string{"run", "--", "img", `C:\b`}, []string{"run", "--", "img", `C:\b`}},
 		{"no arguments", nil, nil},
+		{"value types with dashes and capitals", []string{"run", "--gpus", "all", "-v", `C:\a:/d`, "img", "-v", `C:\b:/d`}, []string{"run", "--gpus", "all", "-v", "/mnt/c/a:/d", "img", "-v", `C:\b:/d`}},
+		{"optional value", []string{"run", "--optional", "img", "-v", `C:\b:/d`}, []string{"run", "--optional", "img", "-v", `C:\b:/d`}},
+		{"flag with equals sign", []string{"run", `-v=C:\a:/d`, "img"}, []string{"run", "-v=/mnt/c/a:/d", "img"}},
+		{"volume, inline with forward slashes", []string{"run", "-vC:/a:/d", "img"}, []string{"run", "-v/mnt/c/a:/d", "img"}},
+
+		{"buildx build", []string{"buildx", "build", "--build-context", `lib=C:\lib`, "--secret", `id=t,src=C:\t`, "--ssh", `default=C:\k`, "--metadata-file", `C:\m.json`, `--iidfile=C:\i`, "--cache-to", `type=local,dest=C:\c`, "--cache-from", `type=local,src=C:\c`, `C:\ctx`}, []string{"buildx", "build", "--build-context", "lib=/mnt/c/lib", "--secret", "id=t,src=/mnt/c/t", "--ssh", "default=/mnt/c/k", "--metadata-file", "/mnt/c/m.json", "--iidfile=/mnt/c/i", "--cache-to", "type=local,dest=/mnt/c/c", "--cache-from", "type=local,src=/mnt/c/c", "/mnt/c/ctx"}},
+		{"build from standard input", []string{"build", "-f", "-", `C:\ctx`}, []string{"build", "-f", "-", "/mnt/c/ctx"}},
+		{"bake", []string{"buildx", "bake", "-f", `C:\p\bake.hcl`, "--set", `*.context=C:\p`, "--set", `*.output=type=local,dest=C:\o`, "--set", `app.args.DIR=C:\keep`, "app"}, []string{"buildx", "bake", "-f", "/mnt/c/p/bake.hcl", "--set", "*.context=/mnt/c/p", "--set", "*.output=type=local,dest=/mnt/c/o", "--set", `app.args.DIR=C:\keep`, "app"}},
+		{"buildx create", []string{"buildx", "create", "--buildkitd-config", `C:\b.toml`}, []string{"buildx", "create", "--buildkitd-config", "/mnt/c/b.toml"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := slices.Clone(tt.in)
-			if got := translateArgs(in); !slices.Equal(got, tt.want) {
-				t.Errorf("got  %q\nwant %q", got, tt.want)
+			got, err := translateArgs(in, fakeHelp)
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Errorf("got  %q %v\nwant %q", got, err, tt.want)
 			}
 			if !slices.Equal(in, tt.in) {
 				t.Errorf("the input was changed: %q", in)
@@ -66,13 +76,13 @@ func TestForwardEnv(t *testing.T) {
 			wslenv = value
 		}
 	}
-	if want := "MINE/p:OTHER:FOO/u:DOCKER_CONFIG/up:COMPOSE_FILE/ul"; wslenv != want {
+	if want := "MINE/p:OTHER:FOO/u:DOCKER_CONFIG/up:COMPOSE_FILE/ul:" + activeEnv; wslenv != want {
 		t.Errorf("WSLENV\ngot  %s\nwant %s", wslenv, want)
 	}
 	if !slices.Contains(out, "FOO=bar") || !slices.Contains(out, "Path=C:\\Windows") {
 		t.Errorf("wsl.exe itself must keep the whole environment: %q", out)
 	}
-	if host := forwardEnv([]string{"DOCKER_HOST=tcp://1.2.3.4:2375"}); !slices.Contains(host, "WSLENV=DOCKER_HOST/u") {
+	if host := forwardEnv([]string{"DOCKER_HOST=tcp://1.2.3.4:2375"}); !slices.Contains(host, "WSLENV=DOCKER_HOST/u:"+activeEnv) {
 		t.Errorf("a reachable DOCKER_HOST is forwarded: %q", host)
 	}
 }

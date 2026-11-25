@@ -1,5 +1,3 @@
-//go:build windows
-
 // Command docker runs the docker CLI of the default WSL distribution as if it were docker.exe.
 package main
 
@@ -10,65 +8,76 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
-	"unsafe"
+)
 
-	"golang.org/x/sys/windows"
+const (
+	// activeEnv marks a docker in WSL that the shim started. It travels back to Windows too.
+	activeEnv = "DOCKER_WSL_SHIM_ACTIVE"
+	// dockerPathEnv names the docker to run in WSL.
+	dockerPathEnv = "DOCKER_WSL_SHIM_DOCKER_PATH"
+	// printCommandEnv prints the command instead of running it.
+	printCommandEnv = "DOCKER_WSL_SHIM_PRINT_COMMAND"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	code, err := run(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR(docker-wsl-shim):", err)
+	}
+	os.Exit(code)
 }
 
-func run(args []string) int {
-	// -e (--exec) runs docker without a shell, so that every argument arrives unchanged.
-	wsl := filepath.Join(os.Getenv("SystemRoot"), "System32", "wsl.exe")
-	cmd := exec.Command(wsl, append([]string{"-e", "docker"}, translateArgs(args)...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = forwardEnv(os.Environ())
+func run(args []string) (code int, err error) {
+	if os.Getenv(activeEnv) != "" {
+		return 1, errors.New("docker in WSL led back to this shim: install Docker in the default WSL distribution, or set " + dockerPathEnv)
+	}
+	docker := os.Getenv(dockerPathEnv)
+	if docker == "" {
+		docker = "docker"
+	}
+	args, err = translateArgs(args, func(command ...string) (string, error) {
+		cmd := wsl(append(append([]string{docker}, command...), "--help")...)
+		cmd.Stderr = os.Stderr
+		out, err := cmd.Output()
+		return string(out), err
+	})
+	if err != nil {
+		return 1, err
+	}
+	if os.Getenv(printCommandEnv) == "true" {
+		fmt.Println(docker, strings.Join(args, " "))
+		return 0, nil
+	}
 
 	// wsl.exe gets Ctrl+C from the console too. Stay alive to report docker's own exit code.
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt, syscall.SIGTERM)
 
-	err := cmd.Start()
-	if err == nil {
-		if jobErr := killWithParent(cmd.Process.Pid); jobErr != nil {
-			fmt.Fprintln(os.Stderr, "docker-wsl-shim: warning:", jobErr)
-		}
-		err = cmd.Wait()
+	cmd := wsl(append([]string{docker}, args...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return 127, err
 	}
+	if err := killWithParent(cmd.Process.Pid); err != nil {
+		fmt.Fprintln(os.Stderr, "WARNING(docker-wsl-shim):", err)
+	}
+	err = cmd.Wait()
 	var exit *exec.ExitError
-	switch {
-	case err == nil:
-		return 0
-	case errors.As(err, &exit):
-		return exit.ExitCode()
-	default:
-		fmt.Fprintln(os.Stderr, "docker-wsl-shim:", err)
-		return 127
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
 	}
+	if err != nil {
+		return 127, err
+	}
+	return 0, nil
 }
 
-// killWithParent makes Windows end process pid when this process ends, however it ends. The job
-// handle is left open on purpose: closing it is what ends pid.
-func killWithParent(pid int) error {
-	job, err := windows.CreateJobObject(nil, nil)
-	if err != nil {
-		return fmt.Errorf("create job object: %w", err)
-	}
-	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
-		return fmt.Errorf("set up job object: %w", err)
-	}
-	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
-	if err != nil {
-		return fmt.Errorf("open wsl.exe: %w", err)
-	}
-	defer windows.CloseHandle(process)
-	if err := windows.AssignProcessToJobObject(job, process); err != nil {
-		return fmt.Errorf("assign wsl.exe to job object: %w", err)
-	}
-	return nil
+// wsl returns a command that runs in the default WSL distribution. -e (--exec) uses no shell, so
+// that every argument arrives unchanged.
+func wsl(args ...string) *exec.Cmd {
+	exe := filepath.Join(os.Getenv("SystemRoot"), "System32", "wsl.exe")
+	cmd := exec.Command(exe, append([]string{"-e"}, args...)...)
+	cmd.Env = forwardEnv(os.Environ())
+	return cmd
 }

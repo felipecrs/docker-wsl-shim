@@ -9,10 +9,12 @@ import (
 var keptOutEnv = set(
 	"HOME", "HOSTNAME", "LOGNAME", "OLDPWD", "PATH", "PATHEXT", "PS1", "PWD", "SHELL", "SHLVL", "TEMP",
 	"TERM", "TMP", "TMPDIR", "USER", "WSLENV", "WSL_UTF8", "_",
+	activeEnv, dockerPathEnv, printCommandEnv,
 )
 
 // pathEnv hold paths, which WSL translates when asked to: /p for one path, /l for a list.
 var pathEnv = map[string]string{
+	"BUILDX_CONFIG":    "/p",
 	"COMPOSE_FILE":     "/l",
 	"DOCKER_CERT_PATH": "/p",
 	"DOCKER_CONFIG":    "/p",
@@ -48,6 +50,8 @@ func forwardEnv(env []string) []string {
 			forward = append(forward, name+"/u"+strings.TrimPrefix(pathEnv[upper], "/"))
 		}
 	}
+	// Without a flag, WSL passes a variable both ways.
+	forward = append(forward, activeEnv)
 	// WSL_UTF8 makes wsl.exe print its own errors in UTF-8.
-	return append(out, "WSL_UTF8=1", "WSLENV="+strings.Join(forward, ":"))
+	return append(out, activeEnv+"=1", "WSL_UTF8=1", "WSLENV="+strings.Join(forward, ":"))
 }
