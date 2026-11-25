@@ -1,10 +1,12 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // pathFlags take a value that is, or contains, a path on the host.
@@ -39,17 +41,44 @@ type translator struct {
 	args []string
 	// help returns the output of `docker <command> --help`.
 	help func(command ...string) (string, error)
-	// valueOptions are the options that take a value, by command.
-	valueOptions map[string]map[string]bool
+	// learned are the options of commands whose help was read.
+	learned map[string]options
 }
 
+// options are the options of a command. The value tells whether the option takes a value.
+type options map[string]bool
+
+//go:embed options.txt
+var optionsFile string
+
+// knownOptions are the options in options.txt by command, so that docker is called only once.
+var knownOptions = sync.OnceValue(func() map[string]options {
+	known := map[string]options{}
+	var command options
+	for line := range strings.Lines(optionsFile) {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || line[0] == '#':
+		case line[0] == '[':
+			command = options{}
+			known[strings.Trim(line, "[]")] = command
+		default:
+			names, takesValue := strings.CutSuffix(line, "=")
+			for _, name := range strings.Fields(names) {
+				command[name] = takesValue
+			}
+		}
+	}
+	return known
+})
+
 // translateArgs rewrites the Windows paths in args to WSL paths and leaves what runs inside a
-// container alone. help is called only when needed to tell the two apart.
+// container alone. help is called only for options that options.txt doesn't have.
 func translateArgs(args []string, help func(command ...string) (string, error)) ([]string, error) {
 	if !slices.ContainsFunc(args, mayHavePath) {
 		return args, nil
 	}
-	t := translator{args: slices.Clone(args), help: help, valueOptions: map[string]map[string]bool{}}
+	t := translator{args: slices.Clone(args), help: help, learned: map[string]options{}}
 	var command []string
 	for i := 0; i < len(t.args); {
 		if isFlag(t.args[i]) {
@@ -85,7 +114,7 @@ func translateArgs(args []string, help func(command ...string) (string, error)) 
 // flag rewrites the value of the flag at index i, if it has one, and returns the index after it.
 func (t *translator) flag(i int, command []string) (next int, err error) {
 	arg := t.args[i]
-	takesValue, err := t.optionsWithValue(command)
+	takesValue, err := t.options(command, arg)
 	if err != nil {
 		return 0, err
 	}
@@ -118,33 +147,63 @@ func (t *translator) rest(start int) {
 	}
 }
 
-// optionsWithValue learns the options of a docker command that take a value from its help, which
-// keeps up with new docker versions.
-func (t *translator) optionsWithValue(command []string) (map[string]bool, error) {
+// options returns the options of a docker command. Those that options.txt doesn't have are learned
+// from docker's help, which keeps up with new docker versions at the cost of a call to WSL.
+func (t *translator) options(command []string, arg string) (options, error) {
+	if len(command) == 2 && command[0] == "container" {
+		command = command[1:] // container run is run
+	}
 	key := strings.Join(command, " ")
-	if options, ok := t.valueOptions[key]; ok {
-		return options, nil
+	if learned, ok := t.learned[key]; ok {
+		return learned, nil
+	}
+	known := knownOptions()[key]
+	if known.have(arg) {
+		return known, nil
 	}
 	help, err := t.help(command...)
 	if err != nil {
 		return nil, fmt.Errorf("could not get the options of %q: %w", strings.TrimSpace("docker "+key), err)
 	}
-	t.valueOptions[key] = parseOptionsWithValue(help)
-	return t.valueOptions[key], nil
+	learned := parseHelp(help)
+	for name, takesValue := range known {
+		if _, ok := learned[name]; !ok { // hidden options are not in the help
+			learned[name] = takesValue
+		}
+	}
+	t.learned[key] = learned
+	return learned, nil
 }
 
-// helpOption matches an option that takes a value: the option, one space, the value's type and at
-// least two spaces. Without a value there is no type, and with an optional one it has a bracket.
-var helpOption = regexp.MustCompile(`(?m)^ +(?:(-\w), )? *(--[\w-]+) [^\s\[]+ {2,}`)
-
-func parseOptionsWithValue(help string) map[string]bool {
-	options := map[string]bool{}
-	for _, match := range helpOption.FindAllStringSubmatch(help, -1) {
-		options[match[1]] = true
-		options[match[2]] = true
+// have reports whether the options are enough to read arg.
+func (o options) have(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		name, _, inline := strings.Cut(arg, "=")
+		_, ok := o[name]
+		return ok || inline
 	}
-	delete(options, "")
-	return options
+	for i := 1; i < len(arg) && arg[i] != '='; i++ {
+		if takesValue, ok := o["-"+arg[i:i+1]]; !ok || takesValue {
+			return ok
+		}
+	}
+	return true
+}
+
+// helpOption matches an option in the help: its names, the type of its value after one space, and
+// at least two spaces. Without a value there is no type, and with an optional one it has a bracket.
+var helpOption = regexp.MustCompile(`(?m)^ +(?:(-\w), )? *(--[\w-]+)(?: ([^\s\[]+)| \S+)?(?: {2,}|$)`)
+
+func parseHelp(help string) options {
+	parsed := options{}
+	for _, match := range helpOption.FindAllStringSubmatch(strings.ReplaceAll(help, "\r", ""), -1) {
+		for _, name := range match[1:3] {
+			if name != "" {
+				parsed[name] = match[3] != ""
+			}
+		}
+	}
+	return parsed
 }
 
 // isFlag reports whether arg is a flag: "-" is a file name and "--" ends the flags.

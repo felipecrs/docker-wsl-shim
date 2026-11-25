@@ -3,6 +3,9 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,6 +120,39 @@ func TestBuild(t *testing.T) {
 			"--set", "*.secrets=id=file,src="+secret, "--set", "*.secrets+=id=var,env=SHIM_SECRET",
 			"--set", `app.args.DIR=C:\kept`, "--set", "*.output=type=local,dest="+out, "app")
 		check(t, out)
+	})
+	t.Run("local cache", func(t *testing.T) {
+		cache := filepath.Join(t.TempDir(), "cache")
+		args := append(append([]string{"buildx", "build"}, options...), "-o", "type=cacheonly", context)
+		run(t, "", append(args, "--cache-to", "type=local,mode=max,dest="+cache)...)
+		if _, err := os.Stat(filepath.Join(cache, "index.json")); err != nil {
+			t.Error(err)
+		}
+		if out := run(t, "", append(args, "--cache-from", "type=local,src="+cache)...); !strings.Contains(out, "importing cache manifest from local:") {
+			t.Errorf("the cache was not read: %s", out)
+		}
+	})
+	t.Run("ssh", func(t *testing.T) {
+		_, private, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := write("id_test", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
+		run(t, "FROM "+image+"\nRUN --mount=type=ssh test -S \"$SSH_AUTH_SOCK\"\n",
+			"buildx", "build", "--no-cache", "-f", "-", "--ssh", "default="+key, "-o", "type=cacheonly", context)
+	})
+	t.Run("buildx create", func(t *testing.T) {
+		config := write("buildkitd.toml", "[worker.oci]\n  max-parallelism = 3\n")
+		t.Cleanup(func() { _ = exec.Command(docker, "buildx", "rm", testImage).Run() })
+		run(t, "", "buildx", "create", "--name", testImage, "--driver", "docker-container", "--buildkitd-config", config)
+		// The file is read now, so it shows up without starting the builder.
+		if out := run(t, "", "buildx", "inspect", testImage); !strings.Contains(out, "max-parallelism = 3") {
+			t.Errorf("the config was not read: %s", out)
+		}
 	})
 	t.Run("compose build", func(t *testing.T) {
 		file := write("build.compose.yml", "services:\n  app:\n    image: "+testImage+"\n    build:\n      context: ./context dir\n      dockerfile_inline: |\n        FROM scratch\n        COPY hello.txt /\n")

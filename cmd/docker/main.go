@@ -77,7 +77,18 @@ func run(args []string) (code int, err error) {
 // that every argument arrives unchanged.
 func wsl(args ...string) *exec.Cmd {
 	exe := filepath.Join(os.Getenv("SystemRoot"), "System32", "wsl.exe")
+	if programs := os.Getenv("ProgramFiles"); programs != "" {
+		// The one in System32 only starts this one, which takes time.
+		if direct := filepath.Join(programs, "WSL", "wsl.exe"); exists(direct) {
+			exe = direct
+		}
+	}
 	cmd := exec.Command(exe, append([]string{"-e"}, args...)...)
 	cmd.Env = forwardEnv(os.Environ())
 	return cmd
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

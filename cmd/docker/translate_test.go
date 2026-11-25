@@ -42,6 +42,9 @@ func TestTranslateArgs(t *testing.T) {
 		{"no arguments", nil, nil},
 		{"value types with dashes and capitals", []string{"run", "--gpus", "all", "-v", `C:\a:/d`, "img", "-v", `C:\b:/d`}, []string{"run", "--gpus", "all", "-v", "/mnt/c/a:/d", "img", "-v", `C:\b:/d`}},
 		{"optional value", []string{"run", "--optional", "img", "-v", `C:\b:/d`}, []string{"run", "--optional", "img", "-v", `C:\b:/d`}},
+		{"new options", []string{"run", "-ZN", "x", "--new", "y", "--net", "host", "-v", `C:\a:/d`, "img", "-v", `C:\b:/d`}, []string{"run", "-ZN", "x", "--new", "y", "--net", "host", "-v", "/mnt/c/a:/d", "img", "-v", `C:\b:/d`}},
+		{"hidden options", []string{"run", "--net", "host", "-v", `C:\a:/d`, "img", "-v", `C:\b:/d`}, []string{"run", "--net", "host", "-v", "/mnt/c/a:/d", "img", "-v", `C:\b:/d`}},
+		{"switched off boolean", []string{"run", "-t=false", "--rm=false", "-v", `C:\a:/d`, "img"}, []string{"run", "-t=false", "--rm=false", "-v", "/mnt/c/a:/d", "img"}},
 		{"flag with equals sign", []string{"run", `-v=C:\a:/d`, "img"}, []string{"run", "-v=/mnt/c/a:/d", "img"}},
 		{"volume, inline with forward slashes", []string{"run", "-vC:/a:/d", "img"}, []string{"run", "-v/mnt/c/a:/d", "img"}},
 

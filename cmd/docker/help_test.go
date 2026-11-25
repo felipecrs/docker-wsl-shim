@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -9,57 +10,43 @@ import (
 	"testing"
 )
 
-// fakeHelp has the layout of docker's own help.
-func fakeHelp(command ...string) (string, error) {
-	switch strings.Join(command, " ") {
-	case "":
-		return `
-Options:
-      --config string      Location of client config files (default
-                           "/root/.docker")
-  -c, --context string     Name of the context
-  -D, --debug              Enable debug mode
-`, nil
-	case "compose":
-		return `
-Options:
-      --all-resources              Include all resources
-      --env-file stringArray       Specify an alternate environment file
-  -f, --file stringArray           Compose configuration files
-  -p, --project-name string        Project name
-`, nil
-	}
+// fakeHelp has the layout of docker's own help, with options that options.txt doesn't have.
+func fakeHelp(...string) (string, error) {
 	return `
 Options:
-      --cidfile string                   Write the container ID to the file
-  -d, --detach                           Run container in background
-  -e, --env list                         Set environment variables
-      --gpus gpu-request                 GPU devices to add to the container
-  -i, --interactive                      Keep STDIN open even if not attached
-      --label list                       Set meta data on a container
-      --mount mount                      Attach a filesystem mount
-      --name string                      Assign a name to the container
+      --new new-type                     Takes a value, and its description
+                                         --continues on the next line
+  -N, --new-letter stringArray           Takes a value
       --optional string[="x"]            Takes an optional value
-      --rm                               Automatically remove the container
-  -t, --tty                              Allocate a pseudo-TTY
-  -v, --volume list                      Bind mount a volume
-  -w, --workdir string                   Working directory inside the container
-      --use-api-socket                   Bind mount Docker API socket and
-                                         required auth
+  -Z, --zero                             Takes no value (default
+                                         "x")
+      --last
 `, nil
 }
 
-// The help costs a call to WSL, so it is read only when a path could be on either side.
+func TestParseHelp(t *testing.T) {
+	help, _ := fakeHelp()
+	got := parseHelp(help)
+	want := options{"--new": true, "-N": true, "--new-letter": true, "--optional": false, "-Z": false, "--zero": false, "--last": false}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// The help costs another call to WSL, so it is read only for options that options.txt doesn't have.
 func TestHelpIsReadOnlyWhenNeeded(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		args  []string
 		calls []string
 	}{
-		{"no path", []string{"run", "--rm", "-v", "cache:/c", "-v", "/srv:/srv", "img", "curl", "https://x/y"}, nil},
-		{"runs nothing in a container", []string{"build", "-f", `C:\Dockerfile`, "."}, nil},
-		{"no flag", []string{"run", "img", `C:\b`}, nil},
-		{"each command once", []string{"-D", "compose", "-f", `C:\c.yml`, "-p", "x", "run", "--rm", "-v", `C:\a:/d`, "svc"}, []string{"", "compose", "compose run"}},
+		{"no path", []string{"run", "--new", "x", "img", "curl", "https://x/y"}, nil},
+		{"runs nothing in a container", []string{"build", "--new", "x", "-f", `C:\Dockerfile`, "."}, nil},
+		{"known options", []string{"-D", "container", "run", "--rm", "-it", "-v", `C:\a:/d`, "--net", "host", "img"}, nil},
+		{"known compose options", []string{"compose", "-f", `C:\c.yml`, "-p", "x", "run", "--rm", "-v", `C:\a:/d`, "svc"}, nil},
+		{"value in the same argument", []string{"run", "--new=x", "-v", `C:\a:/d`, "img"}, nil},
+		{"each command once", []string{"--new", "x", "compose", "--new", "x", "run", "--new", "x", "--optional", "-v", `C:\a:/d`, "svc"}, []string{"", "compose", "compose run"}},
+		{"unknown letter in a cluster", []string{"run", "-iZv", `C:\a:/d`, "img"}, []string{"run"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []string
@@ -72,7 +59,7 @@ func TestHelpIsReadOnlyWhenNeeded(t *testing.T) {
 			}
 		})
 	}
-	_, err := translateArgs([]string{"run", "-v", `C:\a:/d`, "img"}, func(...string) (string, error) {
+	_, err := translateArgs([]string{"run", "--new", "x", "-v", `C:\a:/d`, "img"}, func(...string) (string, error) {
 		return "", errors.New("boom")
 	})
 	if err == nil || !strings.Contains(err.Error(), `"docker run"`) {
@@ -95,6 +82,21 @@ func TestHelpOfDockerVersion(t *testing.T) {
 		args = append(slices.Clone(docker[1:]), append(args, "--help")...)
 		out, err := exec.Command(docker[0], args...).Output()
 		return string(out), err
+	}
+	// A wrong entry in options.txt breaks this version. A missing one costs it a call to WSL.
+	for key, known := range knownOptions() {
+		out, err := help(strings.Fields(key)...)
+		if usage := strings.TrimSpace("docker " + key); err != nil || !strings.Contains(out, usage+" [") {
+			t.Logf("docker %s has no %q", version, usage)
+			continue
+		}
+		for name, takesValue := range parseHelp(out) {
+			if want, ok := known[name]; !ok {
+				t.Logf("not in options.txt: [%s] %s (takes a value: %v)", key, name, takesValue)
+			} else if want != takesValue {
+				t.Errorf("[%s] %s: takes a value: %v, options.txt says %v", key, name, takesValue, want)
+			}
+		}
 	}
 	for _, command := range [][]string{{"run"}, {"create"}, {"container", "run"}} {
 		build := func(cfg, mount, volume string) []string {

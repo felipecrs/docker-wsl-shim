@@ -9,8 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const image = "alpine"
@@ -101,6 +104,15 @@ func TestEndToEnd(t *testing.T) {
 		_ = cmd.Run()
 		if code := cmd.ProcessState.ExitCode(); code != 37 || stdout.String() != "out\n" || stderr.String() != "err\n" {
 			t.Errorf("code %d, stdout %q, stderr %q", code, &stdout, &stderr)
+		}
+	})
+	t.Run("without a console, as from a GUI", func(t *testing.T) {
+		cmd := exec.Command(docker, "run", "--rm", "-i", image, "sh", "-c", "cat; exit 5")
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS}
+		cmd.Stdin = strings.NewReader("in")
+		out, _ := cmd.Output()
+		if code := cmd.ProcessState.ExitCode(); code != 5 || string(out) != "in" {
+			t.Errorf("code %d, stdout %q", code, out)
 		}
 	})
 	t.Run("stdin, binary safe, ends on EOF", func(t *testing.T) {

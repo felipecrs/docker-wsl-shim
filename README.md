@@ -12,10 +12,11 @@ Calling `wsl docker` instead doesn't quite work: Windows paths mean nothing to i
 
 - **Windows paths work**: in `--volume`, `--mount`, `--cidfile`, `cp`, compose files and more. `C:\a` becomes `/mnt/c/a`, `\\wsl.localhost\Ubuntu\a` becomes `/a`, and `.\a` becomes `./a`.
 - **Builds work**: `docker build`, `buildx build`, `buildx bake` and `compose build`, with contexts, secrets, outputs, caches and metadata files on Windows paths.
-- **What runs inside the container is left alone.** The options of each command are learned from `docker --help`, so new docker versions need no changes here.
+- **What runs inside the container is left alone.** The options of docker 18.03 to 29 are built in, and newer ones are learned from `docker --help`.
+- **Fast**: a single call to `wsl.exe`, about 20 ms slower than calling `wsl docker` yourself.
 - **Arguments reach docker unchanged.** There is no shell in between.
 - **Environment variables are passed on**, so that `-e NAME`, `--secret env=NAME` and `${NAME}` in compose files work. `PATH`, `HOME` and others that mean something else on Linux are not.
-- **Streams, exit codes and the working directory** behave as they do with the real CLI. If `docker.exe` is killed, the client in WSL ends too.
+- **Terminals, Ctrl+C, streams, exit codes and the working directory** behave as they do with the real CLI. If `docker.exe` is killed, the client in WSL ends too.
 
 ## Installation
 
@@ -54,6 +55,7 @@ docker run --rm -v C:\a:/a alpine ls C:\a
 
 - Only programs that call the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide.
 - Windows paths written inside compose and bake files are not translated. Relative ones work.
+- Ctrl+Break ends the client instead of reaching the container.
 - Drives are expected under `/mnt`, and `\\wsl.localhost\<distro>` is taken for the default distribution.
 
 ## Development
