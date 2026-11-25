@@ -51,17 +51,27 @@ func run(args []string) (code int, err error) {
 		return 0, nil
 	}
 
-	// wsl.exe gets Ctrl+C from the console too. Stay alive to report docker's own exit code.
-	signal.Notify(make(chan os.Signal, 1), os.Interrupt, syscall.SIGTERM)
+	// Stay alive to report docker's own exit code.
+	signals := make(chan os.Signal, 3)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 	cmd := wsl(append([]string{docker}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	shield(cmd)
+	keepCtrlC()
 	if err := cmd.Start(); err != nil {
 		return 127, err
 	}
 	if err := killWithParent(cmd.Process.Pid); err != nil {
 		fmt.Fprintln(os.Stderr, "WARNING(docker-wsl-shim):", err)
 	}
+	go func() {
+		for s := range signals {
+			if s == os.Interrupt && interruptClient() != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+	}()
 	err = cmd.Wait()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -76,6 +86,12 @@ func run(args []string) (code int, err error) {
 // wsl returns a command that runs in the default WSL distribution. -e (--exec) uses no shell, so
 // that every argument arrives unchanged.
 func wsl(args ...string) *exec.Cmd {
+	cmd := exec.Command(wslPath(), append([]string{"-e"}, args...)...)
+	cmd.Env = forwardEnv(os.Environ())
+	return cmd
+}
+
+func wslPath() string {
 	exe := filepath.Join(os.Getenv("SystemRoot"), "System32", "wsl.exe")
 	if programs := os.Getenv("ProgramFiles"); programs != "" {
 		// The one in System32 only starts this one, which takes time.
@@ -83,9 +99,7 @@ func wsl(args ...string) *exec.Cmd {
 			exe = direct
 		}
 	}
-	cmd := exec.Command(exe, append([]string{"-e"}, args...)...)
-	cmd.Env = forwardEnv(os.Environ())
-	return cmd
+	return exe
 }
 
 func exists(path string) bool {

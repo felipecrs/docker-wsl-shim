@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
+	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -29,4 +32,33 @@ func killWithParent(pid int) error {
 		return fmt.Errorf("assign wsl.exe to job object: %w", err)
 	}
 	return nil
+}
+
+// shield keeps a Ctrl+C or Ctrl+Break sent to this process and its group away from cmd.
+func shield(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
+}
+
+// keepCtrlC undoes what wsl.exe does to the console even if its input is something else: there,
+// Ctrl+C becomes input that nothing reads.
+func keepCtrlC() {
+	var mode uint32
+	if windows.GetConsoleMode(windows.Stdin, &mode) == nil {
+		return // wsl.exe reads it and passes it on
+	}
+	console, err := windows.Open("CONIN$", windows.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	if windows.GetConsoleMode(console, &mode) != nil || mode&windows.ENABLE_PROCESSED_INPUT == 0 {
+		return
+	}
+	go func() {
+		for windows.GetConsoleMode(console, &mode) == nil {
+			if mode&windows.ENABLE_PROCESSED_INPUT == 0 {
+				_ = windows.SetConsoleMode(console, mode|windows.ENABLE_PROCESSED_INPUT)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
 }

@@ -55,7 +55,7 @@ docker run --rm -v C:\a:/a alpine ls C:\a
 
 - Only programs that call the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide.
 - Windows paths written inside compose and bake files are not translated. Relative ones work.
-- Ctrl+Break ends the client instead of reaching the container.
+- The Ctrl+Break key in a terminal ends the client instead of reaching the container. Ctrl+C reaches it, and so does a Ctrl+Break that a program sends to the process group of `docker.exe`.
 - Drives are expected under `/mnt`, and `\\wsl.localhost\<distro>` is taken for the default distribution.
 
 ## Development

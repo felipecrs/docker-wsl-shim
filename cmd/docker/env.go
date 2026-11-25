@@ -53,5 +53,5 @@ func forwardEnv(env []string) []string {
 	// Without a flag, WSL passes a variable both ways.
 	forward = append(forward, activeEnv)
 	// WSL_UTF8 makes wsl.exe print its own errors in UTF-8.
-	return append(out, activeEnv+"=1", "WSL_UTF8=1", "WSLENV="+strings.Join(forward, ":"))
+	return append(out, activeEnv+"="+clientMark, "WSL_UTF8=1", "WSLENV="+strings.Join(forward, ":"))
 }
