@@ -12,10 +12,10 @@ docker compose -f .\compose.yml up -d
 With [mise](https://mise.jdx.dev):
 
 ```powershell
-mise use -g go go:github.com/felipecrs/docker-wsl-shim/cmd/docker
+mise use -g go:github.com/felipecrs/docker-wsl-shim/cmd/docker
 ```
 
-It requires Docker in the default WSL 2 distribution, usable without `sudo`.
+It requires Go to build, and Docker in the default WSL 2 distribution, usable without `sudo`.
 
 ## What it does
 
