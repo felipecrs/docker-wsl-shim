@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -40,13 +41,16 @@ func forwardEnv(env []string) []string {
 		}
 		out = append(out, entry)
 	}
-	for _, entry := range out {
+	for i, entry := range out {
 		name, value, _ := strings.Cut(entry, "=")
 		upper := strings.ToUpper(name)
 		switch {
 		case !envName.MatchString(name), keptOutEnv[upper], taken[name], strings.HasPrefix(upper, "LD_"):
 		case upper == "DOCKER_HOST" && strings.HasPrefix(value, "npipe:"): // Docker Desktop's, unreachable from WSL
 		default:
+			if flag, ok := pathEnv[upper]; ok {
+				out[i] = name + "=" + absPaths(value, flag)
+			}
 			forward = append(forward, name+"/u"+strings.TrimPrefix(pathEnv[upper], "/"))
 		}
 	}
@@ -54,4 +58,21 @@ func forwardEnv(env []string) []string {
 	forward = append(forward, activeEnv)
 	// WSL_UTF8 makes wsl.exe print its own errors in UTF-8.
 	return append(out, activeEnv+"="+clientMark, "WSL_UTF8=1", "WSLENV="+strings.Join(forward, ":"))
+}
+
+// absPaths makes relative paths absolute, as WSL drops what it cannot translate. docker would
+// resolve them against the working directory, so this does too.
+func absPaths(value, flag string) string {
+	entries := []string{value}
+	if flag == "/l" {
+		entries = strings.Split(value, ";")
+	}
+	for i, entry := range entries {
+		if entry != "" && !filepath.IsAbs(entry) {
+			if abs, err := filepath.Abs(entry); err == nil {
+				entries[i] = abs
+			}
+		}
+	}
+	return strings.Join(entries, ";")
 }
