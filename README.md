@@ -53,7 +53,7 @@ docker run --rm -v C:\a:/a alpine ls C:\a
 
 ## Limits
 
-- Only programs that call the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide.
+- Only programs that call the `docker` command are helped. Programs that talk to the Docker API themselves need an endpoint (`\\.\pipe\docker_engine` or `DOCKER_HOST`), which this does not provide. [docker-wsl-proxy](https://github.com/felipecrs/docker-wsl-proxy) does.
 - Windows paths written inside compose and bake files are not translated. Relative ones work.
 - The Ctrl+Break key in a terminal ends the client instead of reaching the container. Ctrl+C reaches it, and so does a Ctrl+Break that a program sends to the process group of `docker.exe`.
 - Drives are expected under `/mnt`, and `\\wsl.localhost\<distro>` is taken for the default distribution.
@@ -68,4 +68,5 @@ The end-to-end tests use the `alpine` image and are skipped when WSL has no Dock
 
 ## See also
 
-- [docker-on-docker-shim](https://github.com/felipecrs/docker-on-docker-shim), which makes volume mounts work when running docker on docker.
+- [docker-wsl-proxy](https://github.com/felipecrs/docker-wsl-proxy), a Docker endpoint on Windows for Docker in WSL, for programs that talk to the Docker API themselves.
+- [docker-on-docker-proxy](https://github.com/felipecrs/docker-on-docker-proxy), which makes bind mounts work in a container that uses the Docker of its host.
