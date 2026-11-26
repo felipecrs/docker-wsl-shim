@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -84,6 +85,14 @@ func TestForwardEnv(t *testing.T) {
 	}
 	if !slices.Contains(out, "FOO=bar") || !slices.Contains(out, "Path=C:\\Windows") {
 		t.Errorf("wsl.exe itself must keep the whole environment: %q", out)
+	}
+	cfg, _ := filepath.Abs("cfg")
+	b, _ := filepath.Abs(`dir\b.yml`)
+	rel := forwardEnv([]string{"DOCKER_CONFIG=cfg", `COMPOSE_FILE=C:\a.yml;dir\b.yml;`, "DOCKER_CERT_PATH=", "OTHER=x"})
+	for _, want := range []string{"DOCKER_CONFIG=" + cfg, `COMPOSE_FILE=C:\a.yml;` + b + ";", "DOCKER_CERT_PATH=", "OTHER=x"} {
+		if !slices.Contains(rel, want) {
+			t.Errorf("want %s in %q", want, rel)
+		}
 	}
 	if host := forwardEnv([]string{"DOCKER_HOST=tcp://1.2.3.4:2375"}); !slices.Contains(host, "WSLENV=DOCKER_HOST/u:"+activeEnv) {
 		t.Errorf("a reachable DOCKER_HOST is forwarded: %q", host)
