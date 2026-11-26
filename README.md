@@ -69,4 +69,4 @@ The end-to-end tests use the `alpine` image and are skipped when WSL has no Dock
 ## See also
 
 - [docker-wsl-proxy](https://github.com/felipecrs/docker-wsl-proxy), a Docker endpoint on Windows for Docker in WSL, for programs that talk to the Docker API themselves.
-- [docker-on-docker-shim](https://github.com/felipecrs/docker-on-docker-shim), which makes volume mounts work when running docker on docker.
+- [docker-on-docker-proxy](https://github.com/felipecrs/docker-on-docker-proxy), which makes bind mounts work in a container that uses the Docker of its host.
